@@ -1,0 +1,18 @@
+name: SoC policy
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the checker and policy
+        run: |
+          python3 -m unittest discover -s tests -q
+          python3 soc_check.py --root "$GITHUB_WORKSPACE" --policy soc-policy.toml --mode all --json

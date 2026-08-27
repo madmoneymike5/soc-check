@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+export PYTHONPATH="/home/sarah-taylor/Dev/soc-check${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 /home/sarah-taylor/Dev/soc-check/soc_check_hook.py "$@"
