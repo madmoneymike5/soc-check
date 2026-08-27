@@ -131,8 +131,10 @@ def _exception(item: dict[str, Any]) -> ExceptionRule:
 
 
 def _grandfather_rules(value: Any, limit: int) -> dict[str, int]:
+    if isinstance(value, dict):
+        value = [{"path": path, "baseline": baseline} for path, baseline in value.items()]
     if not isinstance(value, list):
-        raise PolicyError("grandfathered must be an array of tables")
+        raise PolicyError("grandfathered must be a table or an array of tables")
     result: dict[str, int] = {}
     for item in value:
         if not isinstance(item, dict):

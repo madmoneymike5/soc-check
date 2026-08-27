@@ -67,6 +67,17 @@ class CheckerTests(unittest.TestCase):
             (root / "small.py").write_text(content, encoding="utf-8")
             self.assertTrue(check(root, mode="changed")["ok"])
 
+    def test_grandfathered_table_form_enforces_exact_baselines(self) -> None:
+        with self.repo() as directory:
+            root = Path(directory)
+            content = "x = 1\n" * 301
+            (root / "legacy.py").write_text(content, encoding="utf-8")
+            policy(root, '\n[grandfathered]\n"legacy.py" = 301\n')
+            git(root, "add", ".")
+            self.assertTrue(check(root, mode="all")["ok"])
+            (root / "legacy.py").write_text(content + "x = 2\n", encoding="utf-8")
+            self.assertFalse(check(root, mode="all")["ok"])
+
     def test_broken_policy_and_missing_git_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

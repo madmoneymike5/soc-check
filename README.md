@@ -3,7 +3,9 @@
 `soc-check` enforces a deterministic 300-effective-line source-file policy.
 Blank lines and comment-only lines do not count. Every nonblank physical line
 inside a multiline string counts. Existing oversized files may be listed in
-`soc-policy.toml` with an exact baseline; growth fails. Exceptions name one
+`soc-policy.toml` under a `[grandfathered]` table as exact path-to-baseline
+entries; growth fails. The legacy `[[grandfathered]]` form is also accepted.
+Exceptions name one
 exact path and require an owner, reason, and unexpired date.
 
 Enrolled repositories use the shared checker at a pinned Git commit:
