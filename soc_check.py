@@ -235,7 +235,11 @@ def _git_paths(root: Path, mode: str) -> list[str]:
         result = _git(root, "ls-files", "--cached")
         if result.returncode != 0:
             raise PolicyError(f"git tracked-file query failed: {result.stderr.strip()}")
-        return sorted({line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip()})
+        deleted = _git(root, "ls-files", "--deleted")
+        if deleted.returncode != 0:
+            raise PolicyError(f"git deleted-file query failed: {deleted.stderr.strip()}")
+        deleted_paths = {line.strip().replace("\\", "/") for line in deleted.stdout.splitlines() if line.strip()}
+        return sorted({line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip()} - deleted_paths)
     changed = _git(root, "diff", "--name-only", "--diff-filter=ACMR", "HEAD")
     if changed.returncode != 0:
         changed = _git(root, "diff", "--cached", "--name-only", "--diff-filter=ACMR")

@@ -43,6 +43,12 @@ class CheckerTests(unittest.TestCase):
             (root / "small.py").write_text("x = 1\n" * 301, encoding="utf-8")
             self.assertEqual({item["path"] for item in check(root, mode="changed")["violations"]}, {"new.py", "small.py"})
 
+    def test_pending_deletions_are_not_read_as_source_files(self) -> None:
+        with self.repo() as directory:
+            root = Path(directory)
+            (root / "small.py").unlink()
+            self.assertTrue(check(root, mode="all")["ok"])
+
     def test_lexical_count_handles_comments_blanks_strings_and_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "sample.py"
