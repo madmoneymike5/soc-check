@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from soc_check import PolicyError, check, effective_line_count
+
+
+CENTRAL_ROOT = Path(__file__).resolve().parents[1]
 
 
 def git(root: Path, *args: str) -> None:
@@ -71,6 +76,34 @@ class CheckerTests(unittest.TestCase):
             (root / "soc-policy.toml").write_text("limit = nope\n", encoding="utf-8")
             with self.assertRaises(PolicyError):
                 check(root)
+
+    def test_pinned_hook_reports_violations_and_fails_closed(self) -> None:
+        with self.repo() as directory:
+            root = Path(directory)
+            commit = subprocess.run(
+                ["git", "-C", str(CENTRAL_ROOT), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            policy(root, f'checker_commit = "{commit}"\n')
+            (root / ".soc-enrolled").write_text("", encoding="utf-8")
+            git(root, "add", ".")
+            git(root, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-qm", "enroll")
+            environment = os.environ.copy()
+            environment["SOC_CHECK_FILE"] = str(CENTRAL_ROOT / "soc_check.py")
+            hook = [sys.executable, str(CENTRAL_ROOT / "soc_check_hook.py"), "--mode", "all"]
+            clean = subprocess.run(hook, cwd=root, env=environment, capture_output=True, text=True)
+            self.assertEqual(clean.returncode, 0, clean.stderr)
+            (root / "bad.py").write_text("x = 1\n" * 301, encoding="utf-8")
+            git(root, "add", "bad.py")
+            failed = subprocess.run(hook, cwd=root, env=environment, capture_output=True, text=True)
+            self.assertEqual(failed.returncode, 1)
+            self.assertIn("bad.py", failed.stdout)
+            (root / "soc-policy.toml").unlink()
+            broken = subprocess.run(hook, cwd=root, env=environment, capture_output=True, text=True)
+            self.assertEqual(broken.returncode, 2)
+            self.assertIn("policy", broken.stdout)
 
 
 if __name__ == "__main__":
