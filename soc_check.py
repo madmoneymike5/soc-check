@@ -19,7 +19,7 @@ DEFAULT_LIMIT = 300
 DEFAULT_POLICY = "soc-policy.toml"
 SOURCE_SUFFIXES = frozenset({
     ".c", ".cc", ".cpp", ".css", ".cxx", ".go", ".h", ".hpp", ".html",
-    ".java", ".js", ".jsx", ".json", ".kt", ".kts", ".php", ".py", ".rb",
+    ".java", ".js", ".jsx", ".json", ".kt", ".kts", ".mjs", ".cjs", ".php", ".py", ".rb",
     ".rs", ".sh", ".sql", ".swift", ".toml", ".ts", ".tsx", ".vue", ".yaml", ".yml",
 })
 BINARY_SUFFIXES = frozenset({

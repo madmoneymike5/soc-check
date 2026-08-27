@@ -64,6 +64,15 @@ class CheckerTests(unittest.TestCase):
             c_path.write_text("/* one\ncomment */ int y = 2;\nint x = 1; // code\n// only comment\n", encoding="utf-8")
             self.assertEqual(effective_line_count(c_path), 2)
 
+    def test_javascript_module_suffixes_are_source(self) -> None:
+        with self.repo() as directory:
+            root = Path(directory)
+            (root / "module.mjs").write_text("export const value = 1;\n", encoding="utf-8")
+            (root / "config.cjs").write_text("module.exports = {};\n", encoding="utf-8")
+            (root / "soc-policy.toml").write_text('limit = 300\ninclude = ["**/*.mjs", "**/*.cjs"]\n', encoding="utf-8")
+            included = {item["path"] for item in check(root, mode="all")["files"] if item["included"]}
+            self.assertEqual(included, {"config.cjs", "module.mjs"})
+
     def test_grandfathering_and_exception_rules(self) -> None:
         with self.repo() as directory:
             root = Path(directory)
