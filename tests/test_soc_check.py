@@ -49,6 +49,12 @@ class CheckerTests(unittest.TestCase):
             (root / "small.py").unlink()
             self.assertTrue(check(root, mode="all")["ok"])
 
+    def test_full_scans_include_nonignored_untracked_source_files(self) -> None:
+        with self.repo() as directory:
+            root = Path(directory)
+            (root / "new.py").write_text("x = 1\n" * 301, encoding="utf-8")
+            self.assertFalse(check(root, mode="all")["ok"])
+
     def test_lexical_count_handles_comments_blanks_strings_and_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "sample.py"
