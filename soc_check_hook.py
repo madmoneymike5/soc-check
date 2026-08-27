@@ -44,12 +44,15 @@ def _verify_checker(checker: Path, expected: str) -> None:
     if not checker.is_file():
         raise PolicyError(f"shared checker not found: {checker}")
     repo = checker.parent
+    hook_source = repo / "soc_check_hook.py"
+    if not hook_source.is_file():
+        raise PolicyError(f"shared hook source not found: {hook_source}")
     result = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
     if result.returncode != 0 or result.stdout.strip() != expected:
         actual = result.stdout.strip() or "unavailable"
         raise PolicyError(f"checker pin mismatch: expected {expected}, got {actual}")
     dirty = subprocess.run(
-        ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all", "--", checker.name],
+        ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all", "--", checker.name, hook_source.name],
         capture_output=True,
         text=True,
         check=False,
