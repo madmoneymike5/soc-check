@@ -40,6 +40,18 @@ def _policy(root: Path) -> dict[str, object]:
     return value
 
 
+_GIT_ENV_VARS = ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_PREFIX", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
+
+
+def _clean_git_env() -> dict:
+    """Git sets GIT_DIR/GIT_INDEX_FILE/... in the environment of running
+    hooks; those must not leak into git calls made against the checker
+    repository, or the status check is evaluated against the caller's
+    repo and reports the checker files as untracked."""
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_ENV_VARS}
+    return env
+
+
 def _verify_checker(checker: Path, expected: str) -> None:
     if not checker.is_file():
         raise PolicyError(f"shared checker not found: {checker}")
@@ -47,7 +59,7 @@ def _verify_checker(checker: Path, expected: str) -> None:
     hook_source = repo / "soc_check_hook.py"
     if not hook_source.is_file():
         raise PolicyError(f"shared hook source not found: {hook_source}")
-    result = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
+    result = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=False, env=_clean_git_env())
     if result.returncode != 0 or result.stdout.strip() != expected:
         actual = result.stdout.strip() or "unavailable"
         raise PolicyError(f"checker pin mismatch: expected {expected}, got {actual}")
@@ -56,6 +68,7 @@ def _verify_checker(checker: Path, expected: str) -> None:
         capture_output=True,
         text=True,
         check=False,
+        env=_clean_git_env(),
     )
     if dirty.returncode != 0:
         raise PolicyError(f"cannot verify checker worktree: {dirty.stderr.strip()}")
