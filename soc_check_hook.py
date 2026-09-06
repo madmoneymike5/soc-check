@@ -40,6 +40,14 @@ def _policy(root: Path) -> dict[str, object]:
     return value
 
 
+def _foreign_git_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for name in tuple(environment):
+        if name.startswith("GIT_"):
+            environment.pop(name)
+    return environment
+
+
 def _verify_checker(checker: Path, expected: str) -> None:
     if not checker.is_file():
         raise PolicyError(f"shared checker not found: {checker}")
@@ -47,7 +55,8 @@ def _verify_checker(checker: Path, expected: str) -> None:
     hook_source = repo / "soc_check_hook.py"
     if not hook_source.is_file():
         raise PolicyError(f"shared hook source not found: {hook_source}")
-    result = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
+    environment = _foreign_git_environment()
+    result = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=False, env=environment)
     if result.returncode != 0 or result.stdout.strip() != expected:
         actual = result.stdout.strip() or "unavailable"
         raise PolicyError(f"checker pin mismatch: expected {expected}, got {actual}")
@@ -56,6 +65,7 @@ def _verify_checker(checker: Path, expected: str) -> None:
         capture_output=True,
         text=True,
         check=False,
+        env=environment,
     )
     if dirty.returncode != 0:
         raise PolicyError(f"cannot verify checker worktree: {dirty.stderr.strip()}")
