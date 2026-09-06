@@ -16,3 +16,6 @@ jobs:
       native-command: >-
         python -m compileall -q .
       central-ref: v1
+      opengrep-excludes: ""
+      gitleaks-excludes: |-
+        
