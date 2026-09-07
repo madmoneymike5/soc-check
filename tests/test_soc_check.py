@@ -124,6 +124,8 @@ class CheckerTests(unittest.TestCase):
             git(root, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-qm", "enroll")
             environment = os.environ.copy()
             environment["SOC_CHECK_FILE"] = str(CENTRAL_ROOT / "soc_check.py")
+            environment["GIT_DIR"] = str(root / ".git")
+            environment["GIT_WORK_TREE"] = str(root)
             hook = [sys.executable, str(CENTRAL_ROOT / "soc_check_hook.py"), "--mode", "all"]
             clean = subprocess.run(hook, cwd=root, env=environment, capture_output=True, text=True)
             self.assertEqual(clean.returncode, 0, clean.stderr)
