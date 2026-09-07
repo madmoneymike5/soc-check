@@ -41,6 +41,7 @@ def _policy(root: Path) -> dict[str, object]:
 
 
 def _foreign_git_environment() -> dict[str, str]:
+    """Remove caller Git context before inspecting the checker repository."""
     environment = os.environ.copy()
     for name in tuple(environment):
         if name.startswith("GIT_"):
