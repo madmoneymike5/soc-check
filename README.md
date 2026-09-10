@@ -27,7 +27,11 @@ CI workflow that fetches this repository's checker source at the pinned commit.
 Do not enroll temporary worktrees, snapshots, generated checkouts, or publish
 staging directories.
 
-Codex uses a global `PostToolUse` check plus a `Stop` check. Pi uses the
-separate `~/.pi/agent/extensions/soc-check` extension: read-only inspection is
-allowed while blocked, but unrelated tool calls are blocked until the listed
-files are repaired. The Pi extension does not modify the auto-reviewer.
+Codex uses a global `PostToolUse` check plus a `Stop` check. Pi extension
+source is versioned under `pi-extension/`; install it at
+`~/.pi/agent/extensions/soc-check`. While source violations are active, Pi
+still allows read-only inspection, task and research tools, documentation-only
+edits, and `git wt add|audit|list|prune|remove`. Source repair tools must target
+every reported violation path exactly; mixed or unrelated source mutations stay
+blocked. A blocked call returns control instead of terminating the turn. Pi's
+extension does not modify the auto-reviewer.
