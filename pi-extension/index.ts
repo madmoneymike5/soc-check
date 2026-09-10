@@ -7,15 +7,17 @@
  * tools remain available so the policy cannot deadlock its own repair workflow.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
 import type {
   ExtensionAPI,
   ExtensionContext,
   ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 
+const execFileAsync = promisify(execFile);
 const DEFAULT_HOOK = "/home/sarah-taylor/Dev/soc-check/bin/soc-check-hook";
 const CHECKER_HOOK = process.env.SOC_CHECK_HOOK ?? DEFAULT_HOOK;
 const ENROLLED_ROOTS = new Set([
@@ -36,7 +38,7 @@ const ENROLLED_ROOTS = new Set([
 const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const SOURCE_MUTATION_TOOLS = new Set(["edit", "write", "apply_patch", "ast_grep_replace"]);
 const DOCUMENT_PATH = /(?:\.(?:md|mdx|rst|adoc|txt)|(?:^|\/)(?:README|CHANGELOG|LICENSE|AGENTS))$/i;
-const SHELL_CONTROL = /[;&|<>\n`]|\$\(/;
+const SHELL_CONTROL = /[;&|<>\n`$]/;
 const GIT_WRITING_OPTION = /(?:^|\s)(?:--output(?:=|\s)|--ext-diff(?:\s|$)|--textconv(?:\s|$))/;
 const READ_ONLY_BASH = /^(?:git(?:\s+-C\s+(?:"[^"]*"|'[^']*'|[^\s]+))?\s+(?:status|diff|log|show|ls-files|rev-parse)|(?:cat|head|tail|grep|ls|pwd|wc))(?:\s|$)/;
 const WORKTREE_ADMIN_BASH = /^git(?:\s+-C\s+(?:"[^"]*"|'[^']*'|[^\s]+))?\s+wt\s+(?:add|audit|list|prune|remove)(?:\s+\S+)*$/;
@@ -70,30 +72,32 @@ let state: EnforcementState = {
   violations: [],
 };
 
+function asCheckerReport(value: unknown): CheckerReport | null {
+  return value !== null && typeof value === "object" ? value as CheckerReport : null;
+}
+
 export function parseCheckerOutput(output: string): CheckerReport | null {
   const trimmed = output.trim();
   if (!trimmed) return null;
   try {
-    const value: unknown = JSON.parse(trimmed);
-    return value && typeof value === "object" ? value as CheckerReport : null;
+    return asCheckerReport(JSON.parse(trimmed));
   } catch {
     const start = trimmed.indexOf("{");
     if (start < 0) return null;
     try {
-      const value: unknown = JSON.parse(trimmed.slice(start, trimmed.lastIndexOf("}") + 1));
-      return value && typeof value === "object" ? value as CheckerReport : null;
+      return asCheckerReport(JSON.parse(trimmed.slice(start, trimmed.lastIndexOf("}") + 1)));
     } catch {
       return null;
     }
   }
 }
 
-function rootFor(cwd: string): string | undefined {
+async function rootFor(cwd: string): Promise<string | undefined> {
   try {
-    return execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
+    const { stdout } = await execFileAsync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim() || undefined;
+    });
+    return stdout.trim() || undefined;
   } catch {
     return undefined;
   }
@@ -103,15 +107,14 @@ export function isEnrolled(root: string): boolean {
   return ENROLLED_ROOTS.has(root) || existsSync(join(root, ".soc-enrolled"));
 }
 
-function checkRepository(root: string, mode: "changed" | "all"): CheckResult {
+async function checkRepository(root: string, mode: "changed" | "all"): Promise<CheckResult> {
   try {
-    const output = execFileSync(CHECKER_HOOK, ["--mode", mode], {
+    const { stdout } = await execFileAsync(CHECKER_HOOK, ["--mode", mode], {
       cwd: root,
       encoding: "utf8",
       timeout: 20_000,
-      stdio: ["ignore", "pipe", "pipe"],
     });
-    return { report: parseCheckerOutput(output) ?? { ok: false, error: "checker returned invalid JSON" }, output };
+    return { report: parseCheckerOutput(stdout) ?? { ok: false, error: "checker returned invalid JSON" }, output: stdout };
   } catch (error) {
     const failure = error as { stdout?: Buffer | string; stderr?: Buffer | string; message?: string };
     const output = [failure.stdout, failure.stderr, failure.message]
@@ -130,13 +133,13 @@ function reportReason(result: CheckResult): string {
   return details.join("; ") || "source-file policy failed";
 }
 
-function inspect(ctx: ExtensionContext, mode: "changed" | "all"): EnforcementState {
-  const root = rootFor(ctx.cwd);
+async function inspect(ctx: ExtensionContext, mode: "changed" | "all"): Promise<EnforcementState> {
+  const root = await rootFor(ctx.cwd);
   if (!root || !isEnrolled(root)) {
     state = { blocked: false, reason: "", violations: [] };
     return state;
   }
-  const result = checkRepository(root, mode);
+  const result = await checkRepository(root, mode);
   const violations = result.report.violations ?? [];
   state = {
     root,
@@ -151,9 +154,14 @@ function normalizedToolName(event: ToolCallEvent): string {
   return event.toolName.split(/[./]/).pop() ?? event.toolName;
 }
 
+function inputFor(event: ToolCallEvent): Record<string, unknown> | undefined {
+  const input: unknown = event.input;
+  return input !== null && typeof input === "object" ? input as Record<string, unknown> : undefined;
+}
+
 function commandFor(event: ToolCallEvent): string {
-  const input = event.input as Record<string, unknown>;
-  return typeof input.command === "string" ? input.command : "";
+  const input = inputFor(event);
+  return typeof input?.command === "string" ? input.command : "";
 }
 
 function violationPaths(): string[] {
@@ -163,7 +171,8 @@ function violationPaths(): string[] {
 }
 
 function mutationPaths(event: ToolCallEvent): string[] {
-  const input = event.input as Record<string, unknown>;
+  const input = inputFor(event);
+  if (!input) return [];
   const paths: string[] = [];
   if (typeof input.path === "string") paths.push(input.path);
   if (Array.isArray(input.paths)) {
@@ -180,19 +189,35 @@ function mutationPaths(event: ToolCallEvent): string[] {
   return paths;
 }
 
-function targetsOnlyViolations(event: ToolCallEvent): boolean {
-  if (!state.root) return false;
+function normalizedPath(path: string): string {
+  return path.startsWith("@") ? path.slice(1) : path;
+}
+
+function resolvedMutationPath(cwd: string, path: string): string {
+  return resolve(cwd, normalizedPath(path));
+}
+
+function isWithinRoot(root: string, path: string): boolean {
+  const relativePath = relative(resolve(root), resolve(path));
+  return relativePath === ""
+    || (relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
+}
+
+function targetsOnlyViolations(event: ToolCallEvent, cwd = state.root): boolean {
+  if (!state.root || !cwd) return false;
   const paths = mutationPaths(event);
   if (paths.length === 0) return false;
   const violations = new Set(violationPaths().map((path) => resolve(state.root!, path)));
-  return paths.every((path) => violations.has(resolve(state.root!, path)));
+  return paths.every((path) => violations.has(resolvedMutationPath(cwd, path)));
 }
 
-export function isDocumentationMutation(event: ToolCallEvent): boolean {
+export function isDocumentationMutation(event: ToolCallEvent, cwd: string, root: string): boolean {
   const name = normalizedToolName(event);
   if (!["edit", "write", "apply_patch"].includes(name)) return false;
   const paths = mutationPaths(event);
-  return paths.length > 0 && paths.every((path) => DOCUMENT_PATH.test(path));
+  return paths.length > 0 && paths.every((path) =>
+    DOCUMENT_PATH.test(normalizedPath(path)) && isWithinRoot(root, resolvedMutationPath(cwd, path))
+  );
 }
 
 export function isReadOnlyBash(command: string): boolean {
@@ -208,30 +233,39 @@ export function isWorktreeAdminBash(command: string): boolean {
   return !SHELL_CONTROL.test(trimmed) && WORKTREE_ADMIN_BASH.test(trimmed);
 }
 
-function isRepairCall(event: ToolCallEvent): boolean {
-  return SOURCE_MUTATION_TOOLS.has(normalizedToolName(event)) && targetsOnlyViolations(event);
+function isRepairCall(event: ToolCallEvent, cwd = state.root): boolean {
+  return SOURCE_MUTATION_TOOLS.has(normalizedToolName(event)) && targetsOnlyViolations(event, cwd);
 }
 
-function mayMutateSource(event: ToolCallEvent): boolean {
+function mayMutateSource(event: ToolCallEvent, cwd: string): boolean {
   const name = normalizedToolName(event);
-  if (SOURCE_MUTATION_TOOLS.has(name)) return !isDocumentationMutation(event);
+  if (SOURCE_MUTATION_TOOLS.has(name)) {
+    const root = state.root;
+    return !root || !isDocumentationMutation(event, cwd, root);
+  }
   if (name !== "bash") return false;
   const command = commandFor(event);
   return !isReadOnlyBash(command) && !isWorktreeAdminBash(command);
 }
 
 function blockedReason(): string {
+  if (state.violations.length === 0) {
+    return `SoC enforcement error: ${state.reason}. Restore checker and policy health before continuing source changes.`;
+  }
   return `SoC policy violation: ${state.reason}. Repair the listed file(s) before continuing unrelated source changes.`;
 }
 
-export function toolAllowedWhileBlocked(event: ToolCallEvent): boolean {
+export function toolAllowedWhileBlocked(event: ToolCallEvent, cwd = state.root): boolean {
   const name = normalizedToolName(event);
   if (READ_TOOLS.has(name)) return true;
   if (name === "bash") {
     const command = commandFor(event);
-    return isReadOnlyBash(command) || isWorktreeAdminBash(command) || isRepairCall(event);
+    return isReadOnlyBash(command) || isWorktreeAdminBash(command) || isRepairCall(event, cwd);
   }
-  if (SOURCE_MUTATION_TOOLS.has(name)) return isDocumentationMutation(event) || isRepairCall(event);
+  if (SOURCE_MUTATION_TOOLS.has(name)) {
+    const root = state.root;
+    return Boolean(root && cwd && isDocumentationMutation(event, cwd, root)) || isRepairCall(event, cwd);
+  }
   return true;
 }
 
@@ -247,22 +281,22 @@ function reset(): void {
 }
 
 export default async function (pi: ExtensionAPI): Promise<void> {
-  pi.on("tool_call", (event, ctx) => {
-    const current = inspect(ctx, "changed");
+  pi.on("tool_call", async (event, ctx) => {
+    const current = await inspect(ctx, "changed");
     if (!current.blocked) {
-      if (mayMutateSource(event)) recheckToolCalls.add(event.toolCallId);
+      if (mayMutateSource(event, ctx.cwd)) recheckToolCalls.add(event.toolCallId);
       return;
     }
-    if (toolAllowedWhileBlocked(event)) {
-      if (isRepairCall(event)) recheckToolCalls.add(event.toolCallId);
+    if (toolAllowedWhileBlocked(event, ctx.cwd)) {
+      if (isRepairCall(event, ctx.cwd)) recheckToolCalls.add(event.toolCallId);
       return;
     }
     return blockingResponse(blockedReason());
   });
 
-  pi.on("tool_result", (event, ctx) => {
+  pi.on("tool_result", async (event, ctx) => {
     if (!recheckToolCalls.delete(event.toolCallId)) return;
-    const current = inspect(ctx, "changed");
+    const current = await inspect(ctx, "changed");
     if (!current.blocked) return;
     return {
       content: [
@@ -272,8 +306,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     };
   });
 
-  pi.on("agent_settled", (_event, ctx) => {
-    inspect(ctx, "all");
+  pi.on("agent_settled", async (_event, ctx) => {
+    await inspect(ctx, "all");
   });
 
   pi.on("session_shutdown", () => {
