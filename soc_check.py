@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ import tomllib
 
 DEFAULT_LIMIT = 300
 DEFAULT_POLICY = "soc-policy.toml"
+MAX_SOURCE_FILE_BYTES = 10 * 1024 * 1024
 SOURCE_SUFFIXES = frozenset({
     ".c", ".cc", ".cpp", ".css", ".cxx", ".go", ".h", ".hpp", ".html",
     ".java", ".js", ".jsx", ".json", ".kt", ".kts", ".mjs", ".cjs", ".php", ".py", ".rb",
@@ -170,7 +172,41 @@ def _comment_markers(path: str) -> tuple[str, ...]:
     return ("//", "/*")
 
 
+def _safe_source_path(root: Path, name: str) -> Path:
+    relative = PurePosixPath(name)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise PolicyError(f"source path is not relative to repository: {name}")
+    root = root.resolve()
+    candidate = root.joinpath(*relative.parts)
+    current = root
+    try:
+        for part in relative.parts:
+            current /= part
+            if current.is_symlink():
+                raise PolicyError(f"refusing to follow symlink source path: {name}")
+        resolved = candidate.resolve(strict=False)
+    except PolicyError:
+        raise
+    except (OSError, RuntimeError) as exc:
+        raise PolicyError(f"cannot resolve source path {name}: {exc}") from exc
+    if not resolved.is_relative_to(root):
+        raise PolicyError(f"source path escapes repository: {name}")
+    return candidate
+
+
 def effective_line_count(path: Path) -> int:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise PolicyError(f"cannot inspect source file {path}: {exc}") from exc
+    if stat.S_ISLNK(metadata.st_mode):
+        raise PolicyError(f"refusing to follow symlink source file: {path}")
+    if not stat.S_ISREG(metadata.st_mode):
+        raise PolicyError(f"source path is not a regular file: {path}")
+    if metadata.st_size > MAX_SOURCE_FILE_BYTES:
+        raise PolicyError(
+            f"source file {path} exceeds {MAX_SOURCE_FILE_BYTES} byte limit"
+        )
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
@@ -262,12 +298,13 @@ def check(root: Path, *, mode: str = "all", policy_path: Path | None = None) -> 
     paths = _git_paths(root, "changed" if mode == "changed" else "all")
     results: list[FileResult] = []
     for name in paths:
+        source_path = _safe_source_path(root, name)
         source = Path(name).suffix.lower() in SOURCE_SUFFIXES and Path(name).suffix.lower() not in BINARY_SUFFIXES
         included = source and _matches(name, config.include) and not _matches(name, config.exclude)
         if not included:
             results.append(FileResult(name, None, False, "excluded by source, include, or exclude rule"))
             continue
-        count = effective_line_count(root / name)
+        count = effective_line_count(source_path)
         exception = config.exceptions.get(name)
         baseline = config.grandfathered.get(name)
         violation: str | None = None

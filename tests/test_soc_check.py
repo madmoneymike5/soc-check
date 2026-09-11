@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from soc_check import PolicyError, check, effective_line_count
+from soc_check import MAX_SOURCE_FILE_BYTES, PolicyError, check, effective_line_count
 
 
 CENTRAL_ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +55,26 @@ class CheckerTests(unittest.TestCase):
             root = Path(directory)
             (root / "new.py").write_text("x = 1\n" * 301, encoding="utf-8")
             self.assertFalse(check(root, mode="all")["ok"])
+
+    def test_symlink_paths_fail_closed_before_reading(self) -> None:
+        with self.repo() as directory, tempfile.TemporaryDirectory() as outside_directory:
+            root = Path(directory)
+            outside = Path(outside_directory) / "outside.py"
+            outside.write_text("x = 1\n", encoding="utf-8")
+            (root / "escape.py").symlink_to(outside)
+            with self.assertRaisesRegex(PolicyError, "symlink"):
+                check(root, mode="all")
+            (root / "loop.py").symlink_to(root / "loop.py")
+            with self.assertRaisesRegex(PolicyError, "symlink"):
+                effective_line_count(root / "loop.py")
+
+    def test_oversized_source_files_fail_before_reading(self) -> None:
+        with self.repo() as directory:
+            root = Path(directory)
+            huge = root / "huge.py"
+            huge.write_bytes(b"x" * (MAX_SOURCE_FILE_BYTES + 1))
+            with self.assertRaisesRegex(PolicyError, "byte limit"):
+                check(root, mode="all")
 
     def test_lexical_count_handles_comments_blanks_strings_and_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -110,10 +131,16 @@ class CheckerTests(unittest.TestCase):
                 check(root)
 
     def test_pinned_hook_reports_violations_and_fails_closed(self) -> None:
-        with self.repo() as directory:
+        with self.repo() as directory, tempfile.TemporaryDirectory() as checker_directory:
             root = Path(directory)
+            checker_root = Path(checker_directory)
+            for name in ("soc_check.py", "soc_check_hook.py"):
+                shutil.copy2(CENTRAL_ROOT / name, checker_root / name)
+            git(checker_root, "init", "-q")
+            git(checker_root, "add", ".")
+            git(checker_root, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-qm", "checker")
             commit = subprocess.run(
-                ["git", "-C", str(CENTRAL_ROOT), "rev-parse", "HEAD"],
+                ["git", "-C", str(checker_root), "rev-parse", "HEAD"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -123,10 +150,11 @@ class CheckerTests(unittest.TestCase):
             git(root, "add", ".")
             git(root, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-qm", "enroll")
             environment = os.environ.copy()
-            environment["SOC_CHECK_FILE"] = str(CENTRAL_ROOT / "soc_check.py")
+            environment["SOC_CHECK_FILE"] = str(checker_root / "soc_check.py")
+            environment.pop("SOC_CHECK_SHA256", None)
             environment["GIT_DIR"] = str(root / ".git")
             environment["GIT_WORK_TREE"] = str(root)
-            hook = [sys.executable, str(CENTRAL_ROOT / "soc_check_hook.py"), "--mode", "all"]
+            hook = [sys.executable, str(checker_root / "soc_check_hook.py"), "--mode", "all"]
             clean = subprocess.run(hook, cwd=root, env=environment, capture_output=True, text=True)
             self.assertEqual(clean.returncode, 0, clean.stderr)
             (root / "bad.py").write_text("x = 1\n" * 301, encoding="utf-8")
