@@ -20,11 +20,12 @@ function canonicalPath(path: string): string | undefined {
   }
 }
 
-export function isCanonicalPathWithin(root: string, path: string): boolean {
+export function canonicalPathWithin(root: string, path: string): string | undefined {
   const canonicalRoot = canonicalPath(root);
   const canonicalTarget = canonicalPath(path);
-  if (!canonicalRoot || !canonicalTarget) return false;
+  if (!canonicalRoot || !canonicalTarget) return undefined;
   const relativePath = relative(canonicalRoot, canonicalTarget);
-  return relativePath === ""
+  const withinRoot = relativePath === ""
     || (relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
+  return withinRoot ? canonicalTarget : undefined;
 }

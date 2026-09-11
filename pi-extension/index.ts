@@ -16,7 +16,7 @@ import type {
   ExtensionContext,
   ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
-import { isCanonicalPathWithin } from "./path-safety.js";
+import { canonicalPathWithin } from "./path-safety.js";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_HOOK = "/home/sarah-taylor/Dev/soc-check/bin/soc-check-hook";
@@ -237,9 +237,10 @@ export function isDocumentationMutation(event: ToolCallEvent, cwd: string, root:
   const name = normalizedToolName(event);
   if (!["edit", "write", "apply_patch"].includes(name)) return false;
   const paths = mutationPaths(event);
-  return paths.length > 0 && paths.every((path) =>
-    DOCUMENT_PATH.test(normalizedPath(path)) && isCanonicalPathWithin(root, resolvedMutationPath(cwd, path))
-  );
+  return paths.length > 0 && paths.every((path) => {
+    const target = canonicalPathWithin(root, resolvedMutationPath(cwd, path));
+    return DOCUMENT_PATH.test(normalizedPath(path)) && Boolean(target && DOCUMENT_PATH.test(target));
+  });
 }
 
 export function isReadOnlyBash(command: string): boolean {

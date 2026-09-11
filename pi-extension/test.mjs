@@ -17,7 +17,9 @@ mkdirSync(scriptsDirectory);
 mkdirSync(contextDirectory);
 mkdirSync(externalDirectory);
 writeFileSync(join(repository, ".soc-enrolled"), "");
+writeFileSync(join(scriptsDirectory, "source.js"), "source\n");
 writeFileSync(join(externalDirectory, "outside.md"), "outside\n");
+symlinkSync(join(scriptsDirectory, "source.js"), join(contextDirectory, "source.md"));
 symlinkSync(join(externalDirectory, "outside.md"), join(contextDirectory, "escape.md"));
 symlinkSync(externalDirectory, join(repository, "linked-docs"));
 mkdirSync(policyOnlyRepository);
@@ -85,6 +87,8 @@ try {
   assert.equal(outsideDoc?.block, true);
   const symlinkedDoc = await toolCall(event("write", { path: "context/escape.md" }, "symlinked-doc"), context);
   assert.equal(symlinkedDoc?.block, true);
+  const sourceAlias = await toolCall(event("write", { path: "context/source.md" }, "source-alias"), context);
+  assert.equal(sourceAlias?.block, true);
   const symlinkedParent = await toolCall(event("write", { path: "linked-docs/new.md" }, "symlinked-parent"), context);
   assert.equal(symlinkedParent?.block, true);
   const nullWrite = await toolCall(event("write", null, "null-write"), context);
