@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -8,11 +8,18 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const temporaryDirectory = mkdtempSync(join(tmpdir(), "soc-check-extension-"));
 const repository = join(temporaryDirectory, "repository");
 const scriptsDirectory = join(repository, "scripts");
+const contextDirectory = join(repository, "context");
+const externalDirectory = join(temporaryDirectory, "external");
 const policyOnlyRepository = join(temporaryDirectory, "policy-only-repository");
 const checker = join(temporaryDirectory, "checker");
 execFileSync("git", ["init", "-q", repository]);
 mkdirSync(scriptsDirectory);
+mkdirSync(contextDirectory);
+mkdirSync(externalDirectory);
 writeFileSync(join(repository, ".soc-enrolled"), "");
+writeFileSync(join(externalDirectory, "outside.md"), "outside\n");
+symlinkSync(join(externalDirectory, "outside.md"), join(contextDirectory, "escape.md"));
+symlinkSync(externalDirectory, join(repository, "linked-docs"));
 mkdirSync(policyOnlyRepository);
 writeFileSync(join(policyOnlyRepository, "soc-policy.toml"), "limit = 300\n");
 writeFileSync(checker, `#!/bin/sh
@@ -34,6 +41,9 @@ try {
 
   assert.equal(module.isEnrolled(policyOnlyRepository), false);
   assert.equal(module.isEnrolled(repository), true);
+  assert.equal(module.parseCheckerOutput("{}"), null);
+  assert.equal(module.parseCheckerOutput('{"ok":true,"error":"checker failed"}'), null);
+  assert.equal(module.parseCheckerOutput('{"ok":true,"violations":[{"path":"src/app.js"}]}'), null);
 
   assert.equal(module.isDocumentationMutation(event("write", { path: "context/plan.md" }), repository, repository), true);
   assert.equal(module.isDocumentationMutation(event("functions.edit", { path: "README" }), repository, repository), true);
@@ -69,6 +79,10 @@ try {
   assert.equal(await toolResult({ toolCallId: "doc", toolName: "write", input: {}, content: [{ type: "text", text: "saved" }] }, context), undefined);
   const outsideDoc = await toolCall(event("write", { path: join(temporaryDirectory, "outside.md") }, "outside-doc"), context);
   assert.equal(outsideDoc?.block, true);
+  const symlinkedDoc = await toolCall(event("write", { path: "context/escape.md" }, "symlinked-doc"), context);
+  assert.equal(symlinkedDoc?.block, true);
+  const symlinkedParent = await toolCall(event("write", { path: "linked-docs/new.md" }, "symlinked-parent"), context);
+  assert.equal(symlinkedParent?.block, true);
   const nullWrite = await toolCall(event("write", null, "null-write"), context);
   assert.equal(nullWrite?.block, true);
   const nullBash = await toolCall(event("bash", null, "null-bash"), context);
@@ -94,8 +108,16 @@ try {
   assert.equal(mixedPatch.block, true);
   const prefixedPath = await toolCall(event("edit", { path: `${violation}.bak`, oldText: "x", newText: "y" }, "prefix"), context);
   assert.equal(prefixedPath.block, true);
-  const commentBypass = await toolCall(event("bash", { command: `# ${violation}\npython3 -c 'open(\"src/unrelated.js\", \"w\").close()'` }, "comment"), context);
+  const commentBypass = await toolCall(event("bash", { command: `# ${violation}\npython3 -c 'open("src/unrelated.js", "w").close()'` }, "comment"), context);
   assert.equal(commentBypass.block, true);
+
+  writeFileSync(checker, `#!/bin/sh
+printf '%s\\n' '{"ok":true}'
+exit 1
+`);
+  const falseSuccess = await toolCall(event("write", { path: "src/unrelated.js" }, "false-success"), context);
+  assert.equal(falseSuccess?.block, true);
+  assert.match(falseSuccess.reason, /^SoC enforcement error:/);
 
   writeFileSync(checker, `#!/bin/sh
 printf '%s\\n' '{"ok":false,"error":"checker unavailable"}'

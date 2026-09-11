@@ -9,13 +9,14 @@
 
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type {
   ExtensionAPI,
   ExtensionContext,
   ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
+import { isCanonicalPathWithin } from "./path-safety.js";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_HOOK = "/home/sarah-taylor/Dev/soc-check/bin/soc-check-hook";
@@ -49,7 +50,7 @@ export interface Violation {
 }
 
 export interface CheckerReport {
-  ok?: boolean;
+  ok: boolean;
   error?: string;
   violations?: Violation[];
 }
@@ -72,8 +73,31 @@ let state: EnforcementState = {
   violations: [],
 };
 
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+function isViolation(value: unknown): value is Violation {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return isOptionalString(item.path) && isOptionalString(item.violation);
+}
+
+function isViolationList(value: unknown): value is Violation[] | undefined {
+  return value === undefined || (Array.isArray(value) && value.every(isViolation));
+}
+
 function asCheckerReport(value: unknown): CheckerReport | null {
-  return value !== null && typeof value === "object" ? value as CheckerReport : null;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const report = value as Record<string, unknown>;
+  const { error, violations } = report;
+  if (typeof report.ok !== "boolean") return null;
+  if (!isOptionalString(error) || !isViolationList(violations)) return null;
+  if (report.ok && (error !== undefined || (violations?.length ?? 0) > 0)) return null;
+  const valid: CheckerReport = { ok: report.ok };
+  if (error !== undefined) valid.error = error;
+  if (violations !== undefined) valid.violations = violations;
+  return valid;
 }
 
 export function parseCheckerOutput(output: string): CheckerReport | null {
@@ -121,7 +145,11 @@ async function checkRepository(root: string, mode: "changed" | "all"): Promise<C
       .filter(Boolean)
       .map((value) => value instanceof Buffer ? value.toString("utf8") : String(value))
       .join("\n");
-    return { report: parseCheckerOutput(output) ?? { ok: false, error: output.trim() || "checker failed" }, output };
+    const report = parseCheckerOutput(output);
+    if (report?.ok === true) {
+      return { report: { ok: false, error: "checker exited unsuccessfully despite reporting success" }, output };
+    }
+    return { report: report ?? { ok: false, error: output.trim() || "checker failed" }, output };
   }
 }
 
@@ -197,17 +225,12 @@ function resolvedMutationPath(cwd: string, path: string): string {
   return resolve(cwd, normalizedPath(path));
 }
 
-function isWithinRoot(root: string, path: string): boolean {
-  const relativePath = relative(resolve(root), resolve(path));
-  return relativePath === ""
-    || (relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
-}
-
 function targetsOnlyViolations(event: ToolCallEvent, cwd = state.root): boolean {
-  if (!state.root || !cwd) return false;
+  const root = state.root;
+  if (!root || !cwd) return false;
   const paths = mutationPaths(event);
   if (paths.length === 0) return false;
-  const violations = new Set(violationPaths().map((path) => resolve(state.root!, path)));
+  const violations = new Set(violationPaths().map((path) => resolve(root, path)));
   return paths.every((path) => violations.has(resolvedMutationPath(cwd, path)));
 }
 
@@ -216,7 +239,7 @@ export function isDocumentationMutation(event: ToolCallEvent, cwd: string, root:
   if (!["edit", "write", "apply_patch"].includes(name)) return false;
   const paths = mutationPaths(event);
   return paths.length > 0 && paths.every((path) =>
-    DOCUMENT_PATH.test(normalizedPath(path)) && isWithinRoot(root, resolvedMutationPath(cwd, path))
+    DOCUMENT_PATH.test(normalizedPath(path)) && isCanonicalPathWithin(root, resolvedMutationPath(cwd, path))
   );
 }
 
