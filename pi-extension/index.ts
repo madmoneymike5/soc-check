@@ -40,8 +40,7 @@ const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const SOURCE_MUTATION_TOOLS = new Set(["edit", "write", "apply_patch", "ast_grep_replace"]);
 const DOCUMENT_PATH = /(?:\.(?:md|mdx|rst|adoc|txt)|(?:^|\/)(?:README|CHANGELOG|LICENSE|AGENTS))$/i;
 const SHELL_CONTROL = /[;&|<>\n`$]/;
-const GIT_WRITING_OPTION = /(?:^|\s)(?:--output(?:=|\s)|--ext-diff(?:\s|$)|--textconv(?:\s|$))/;
-const READ_ONLY_BASH = /^(?:git(?:\s+-C\s+(?:"[^"]*"|'[^']*'|[^\s]+))?\s+(?:status|diff|log|show|ls-files|rev-parse)|(?:cat|head|tail|grep|ls|pwd|wc))(?:\s|$)/;
+const READ_ONLY_BASH = /^(?:git(?:\s+-C\s+(?:"[^"]*"|'[^']*'|[^\s]+))?\s+(?:ls-files|rev-parse)|(?:cat|head|tail|grep|ls|pwd|wc))(?:\s|$)/;
 const WORKTREE_ADMIN_BASH = /^git(?:\s+-C\s+(?:"[^"]*"|'[^']*'|[^\s]+))?\s+wt\s+(?:add|audit|list|prune|remove)(?:\s+\S+)*$/;
 
 export interface Violation {
@@ -247,7 +246,6 @@ export function isReadOnlyBash(command: string): boolean {
   const trimmed = command.trim();
   return Boolean(trimmed)
     && !SHELL_CONTROL.test(trimmed)
-    && !GIT_WRITING_OPTION.test(trimmed)
     && READ_ONLY_BASH.test(trimmed);
 }
 

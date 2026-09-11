@@ -51,8 +51,12 @@ try {
   assert.equal(module.isDocumentationMutation(event("apply_patch", { changes: [{ path: "a.md" }, { path: "b.txt" }] }), repository, repository), true);
   assert.equal(module.isDocumentationMutation(event("apply_patch", { changes: [{ path: "a.md" }, { path: "b.ts" }] }), repository, repository), false);
 
-  assert.equal(module.isReadOnlyBash("git status --short"), true);
-  assert.equal(module.isReadOnlyBash(`git -C "${repository}" diff`), true);
+  assert.equal(module.isReadOnlyBash("git status --short"), false);
+  assert.equal(module.isReadOnlyBash(`git -C "${repository}" diff`), false);
+  assert.equal(module.isReadOnlyBash("git log -p"), false);
+  assert.equal(module.isReadOnlyBash("git show HEAD"), false);
+  assert.equal(module.isReadOnlyBash("git ls-files"), true);
+  assert.equal(module.isReadOnlyBash("git rev-parse --show-toplevel"), true);
   assert.equal(module.isReadOnlyBash("git status $GIT_STATUS_ARGS"), false);
   assert.equal(module.isReadOnlyBash("git status > src/app.js"), false);
   assert.equal(module.isReadOnlyBash("git diff --output=src/app.js"), false);

@@ -6,7 +6,7 @@ function canonicalPath(path: string): string | undefined {
   try {
     lstatSync(absolute);
   } catch (error) {
-    if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") return undefined;
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
     const parent = dirname(absolute);
     if (parent === absolute) return undefined;
     const canonicalParent = canonicalPath(parent);
@@ -14,7 +14,8 @@ function canonicalPath(path: string): string | undefined {
   }
   try {
     return realpathSync(absolute);
-  } catch {
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
     return undefined;
   }
 }
