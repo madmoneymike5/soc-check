@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import fnmatch
 import json
+import os
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -17,6 +20,7 @@ import tomllib
 
 DEFAULT_LIMIT = 300
 DEFAULT_POLICY = "soc-policy.toml"
+MAX_SOURCE_FILE_BYTES = 10 * 1024 * 1024
 SOURCE_SUFFIXES = frozenset({
     ".c", ".cc", ".cpp", ".css", ".cxx", ".go", ".h", ".hpp", ".html",
     ".java", ".js", ".jsx", ".json", ".kt", ".kts", ".mjs", ".cjs", ".php", ".py", ".rb",
@@ -170,12 +174,81 @@ def _comment_markers(path: str) -> tuple[str, ...]:
     return ("//", "/*")
 
 
-def effective_line_count(path: Path) -> int:
+def _safe_source_path(root: Path, name: str) -> Path:
+    relative = PurePosixPath(name)
+    if not relative.parts or relative.is_absolute() or ".." in relative.parts:
+        raise PolicyError(f"source path is not relative to repository: {name}")
+    candidate = root.joinpath(*relative.parts)
+    if not candidate.is_relative_to(root):
+        raise PolicyError(f"source path escapes repository: {name}")
+    return candidate
+
+
+def _open_source_file(root: Path, name: str) -> int:
+    required_flags = ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK")
+    if os.name != "posix" or any(not hasattr(os, flag) for flag in required_flags):
+        raise PolicyError("safe source reads require POSIX no-follow file primitives")
+    path = _safe_source_path(root, name)
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+    root_fd: int | None = None
+    parent_fd: int | None = None
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
+        root_fd = os.open(root, directory_flags)
+        parent_fd = root_fd
+        parts = PurePosixPath(name).parts
+        for part in parts[:-1]:
+            next_fd = os.open(part, directory_flags, dir_fd=parent_fd)
+            if parent_fd != root_fd:
+                os.close(parent_fd)
+            parent_fd = next_fd
+        return os.open(parts[-1], file_flags, dir_fd=parent_fd)
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, OSError) and exc.errno == errno.ELOOP:
+            raise PolicyError(f"refusing to follow symlink source path: {path}") from exc
+        raise PolicyError(f"cannot open source file {path}: {exc}") from exc
+    finally:
+        if parent_fd is not None and parent_fd != root_fd:
+            os.close(parent_fd)
+        if root_fd is not None:
+            os.close(root_fd)
+
+
+def _read_source_text(root: Path, name: str) -> str:
+    path = _safe_source_path(root, name)
+    descriptor = _open_source_file(root, name)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise PolicyError(f"source path is not a regular file: {path}")
+        if metadata.st_size > MAX_SOURCE_FILE_BYTES:
+            raise PolicyError(
+                f"source file {path} exceeds {MAX_SOURCE_FILE_BYTES} byte limit"
+            )
+        data = bytearray()
+        while len(data) <= MAX_SOURCE_FILE_BYTES:
+            chunk = os.read(descriptor, MAX_SOURCE_FILE_BYTES + 1 - len(data))
+            if not chunk:
+                break
+            data.extend(chunk)
+        if len(data) > MAX_SOURCE_FILE_BYTES:
+            raise PolicyError(
+                f"source file {path} exceeds {MAX_SOURCE_FILE_BYTES} byte limit"
+            )
+    except PolicyError:
+        raise
+    except (OSError, ValueError) as exc:
         raise PolicyError(f"cannot read source file {path}: {exc}") from exc
-    markers = _comment_markers(path.name)
+    finally:
+        os.close(descriptor)
+    try:
+        return bytes(data).decode("utf-8")
+    except UnicodeError as exc:
+        raise PolicyError(f"cannot read source file {path}: {exc}") from exc
+
+
+def _count_effective_lines(path_name: str, text: str) -> int:
+    markers = _comment_markers(Path(path_name).name)
     block_end = "-->" if "<!--" in markers else "*/"
     block_start = "<!--" if "<!--" in markers else "/*"
     quote: str | None = None
@@ -224,6 +297,10 @@ def effective_line_count(path: Path) -> int:
     return count
 
 
+def effective_line_count(path: Path) -> int:
+    return _count_effective_lines(path.name, _read_source_text(path.parent, path.name))
+
+
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=False)
 
@@ -267,7 +344,7 @@ def check(root: Path, *, mode: str = "all", policy_path: Path | None = None) -> 
         if not included:
             results.append(FileResult(name, None, False, "excluded by source, include, or exclude rule"))
             continue
-        count = effective_line_count(root / name)
+        count = _count_effective_lines(name, _read_source_text(root, name))
         exception = config.exceptions.get(name)
         baseline = config.grandfathered.get(name)
         violation: str | None = None

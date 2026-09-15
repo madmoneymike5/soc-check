@@ -17,7 +17,10 @@ checker_commit = "<soc-check commit>"
 Local hooks call `bin/soc-check-hook`. CI should fetch `soc_check.py` from the
 same commit and run `--mode all`. A missing policy, broken policy, missing
 checker, or pin mismatch is an error. The checker has no network or package
-dependencies beyond Python 3.11's standard library.
+dependencies beyond Python 3.11's standard library. For included source files,
+it refuses symlinks and paths outside the repository, reads through POSIX
+no-follow descriptors, and will not read files larger than 10 MiB. Unsupported
+platforms fail closed.
 
 To enroll a project, first confirm its Git root and get approval if it is an
 unknown or upstream repository. Add `soc-policy.toml`, pin `checker_commit`,
